@@ -74,6 +74,62 @@ exception MIPS32_unknown_opcode (MIPS32_t *cpu);
 typedef exception (*MIPS32_opcode_handler_t)(MIPS32_t *cpu);
 extern MIPS32_opcode_handler_t MIPS32_opcode_table[MIPS32_INSTRUCTION_NUM];
 
+typedef struct MIPS32_insctruction_i_type
+{
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+  WORD opcode : 6;
+  WORD rs : 5;
+  WORD rt : 5;
+  WORD imm : 16;
+#elif defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+  WORD imm : 16;
+  WORD rt : 5;
+  WORD rs : 5;
+  WORD opcode : 6;
+#endif
+} MIPS32_instruction_i_type_t;
+
+typedef struct MIPS32_insctruction_j_type
+{
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+  WORD opcode : 6;
+  WORD address : 26;
+#elif defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+  WORD address : 26;
+  WORD opcode : 6;
+#endif
+} MIPS32_instruction_j_type_t;
+
+typedef struct MIPS32_insctruction_r_type
+{
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+  WORD opcode : 6;
+  WORD rs : 5;
+  WORD rt : 5;
+  WORD rd : 5;
+  WORD shamt : 5;
+  WORD funct : 6;
+#elif defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+  WORD funct : 6;
+  WORD shamt : 5;
+  WORD rd : 5;
+  WORD rt : 5;
+  WORD rs : 5;
+  WORD opcode : 6;
+#endif
+} MIPS32_instruction_r_type_t;
+
+typedef struct MIPS32_insctruction
+{
+  union
+  {
+    MIPS32_instruction_i_type_t i;
+    MIPS32_instruction_j_type_t j;
+    MIPS32_instruction_r_type_t r;
+    WORD raw;
+  };
+} MIPS32_insctruction_t;
+
 MIPS32_t *MIPS32_init (MIPS32_t *cpu);
 MIPS32_t *MIPS32_zero_init (MIPS32_t *cpu);
 MIPS32_t *MIPS32_free (MIPS32_t *cpu);
