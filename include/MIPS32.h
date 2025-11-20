@@ -69,6 +69,24 @@ typedef struct MIPS32
   };
 } MIPS32_t;
 
+static void
+MIPS32_dump_state (const MIPS32_t *cpu)
+{
+  for (i16 i = 0; i < MIPS32_NUM_GEN_REGS; ++i)
+    {
+      printf ("r%-2d = 0x%08X", i, (u32) cpu->regs[i]);
+      if ((i + 1) % 4 == 0)
+        putchar('\n');
+
+      else
+        printf("    ");
+    }
+
+  printf ("HI  = 0x%08X\n", (u32) cpu->hi);
+  printf ("LO  = 0x%08X\n", (u32) cpu->lo);
+  printf ("PC  = 0x%08X\n", (u32) cpu->pc);
+}
+
 exception MIPS32_unknown_opcode (MIPS32_t *cpu);
 
 typedef exception (*MIPS32_opcode_handler_t)(MIPS32_t *cpu);
@@ -119,7 +137,7 @@ typedef struct MIPS32_insctruction_r_type
 #endif
 } MIPS32_instruction_r_type_t;
 
-typedef struct MIPS32_insctruction
+typedef struct MIPS32_instruction
 {
   union
   {
@@ -128,7 +146,7 @@ typedef struct MIPS32_insctruction
     MIPS32_instruction_r_type_t r;
     WORD raw;
   };
-} MIPS32_insctruction_t;
+} MIPS32_instruction_t;
 
 MIPS32_t *MIPS32_init (MIPS32_t *cpu);
 MIPS32_t *MIPS32_zero_init (MIPS32_t *cpu);

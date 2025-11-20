@@ -13,6 +13,8 @@ set(SOURCES main.c
         ../include/debug.h
         MIPS32_init.c
         MIPS32_free.c
+        MIPS32_addi.c
+        MIPS32_run.c
 )
 
 add_executable(mips ${SOURCES})

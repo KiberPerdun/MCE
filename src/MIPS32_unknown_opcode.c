@@ -7,8 +7,7 @@
 exception
 MIPS32_unknown_opcode (MIPS32_t *cpu)
 {
-  BYTE byte = cpu->memory[cpu->pc];
-  printf ("unknown opcode 0x%02X at 0x%04X\n", byte, cpu->pc);
+  printf ("unknown opcode at 0x%04X\n", cpu->pc);
   cpu->pc += MIPS32_INSTRUCTION_SIZE;
 
   return 1;
