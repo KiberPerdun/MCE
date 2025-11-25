@@ -139,6 +139,13 @@ static const unsigned char font_8x8[256][8] = {
   { 0x3B, 0x6E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
 };
 
+typedef enum {
+  INPUT_MODE_HEX = 0,
+  INPUT_MODE_BIN = 1,
+  INPUT_MODE_DEC = 2,
+  INPUT_MODE_OCT = 3
+} input_mode_t;
+
 typedef enum
 {
   WRITE_TYPE_VALUE = 0,
@@ -156,6 +163,7 @@ typedef struct
 {
   write_type_t write_type;
   instr_type_t instr_type;
+  input_mode_t input_mode;
   char addr_input[32];
   char value_input[32];
   char r_opcode[16], r_rs[16], r_rt[16], r_rd[16], r_shamt[16], r_func[16];
@@ -167,6 +175,131 @@ typedef struct
   char edit_byte[3];
   int editing;
 } ui_state_t;
+
+static void write_u32_be(u8 *memory, u32 addr, u32 value) {
+  /*memory[addr + 0] = (value >> 24) & 0xFF;
+  memory[addr + 1] = (value >> 16) & 0xFF;
+  memory[addr + 2] = (value >> 8) & 0xFF;
+  memory[addr + 3] = (value >> 0) & 0xFF;*/
+  *((u32 *) (memory + addr)) = value;
+}
+
+static u32 read_u32_be(u8 *memory, u32 addr) {
+  return ((u32)memory[addr + 0] << 24) |
+         ((u32)memory[addr + 1] << 16) |
+         ((u32)memory[addr + 2] << 8) |
+         ((u32)memory[addr + 3] << 0);
+}
+
+static void val_to_str(unsigned int val, char *buf, int mode, int bits) {
+  switch (mode) {
+    case INPUT_MODE_HEX:
+      sprintf(buf, "%X", val);
+      break;
+    case INPUT_MODE_BIN: {
+        if (bits > 0) {
+            for (int i = 0; i < bits; i++) {
+                buf[i] = ((val >> (bits - 1 - i)) & 1) ? '1' : '0';
+              }
+            buf[bits] = '\0';
+          } else
+            ;
+
+      } break;
+    case INPUT_MODE_DEC:
+      sprintf(buf, "%u", val);
+      break;
+    case INPUT_MODE_OCT:
+      sprintf(buf, "%o", val);
+      break;
+    }
+}
+
+static unsigned int str_to_val(const char *buf, int mode, char **endptr) {
+  if (!buf || !*buf) {
+      if (endptr) *endptr = (char *)buf;
+      return 0;
+    }
+
+  if (mode == INPUT_MODE_BIN) {
+      unsigned int res = 0;
+      const char *p = buf;
+      while (*p == ' ') p++;
+
+      while (*p == '0' || *p == '1') {
+          res = (res << 1) | (*p - '0');
+          p++;
+        }
+
+      if (endptr) *endptr = (char *)p;
+      return res;
+    }
+
+  int base = 10;
+  switch (mode) {
+    case INPUT_MODE_HEX: base = 16; break;
+    case INPUT_MODE_DEC: base = 10; break;
+    case INPUT_MODE_OCT: base = 8; break;
+    }
+  return (unsigned int)strtoul(buf, endptr, base);
+}
+
+static void convert_fields(ui_state_t *ui, int old_mode, int new_mode) {
+#define CONV(field, bits) \
+      do { \
+        char *end; \
+        unsigned int v = str_to_val(ui->field, old_mode, &end); \
+        if (ui->field[0] != '\0') val_to_str(v, ui->field, new_mode, (new_mode == INPUT_MODE_BIN) ? bits : 0); \
+      } while(0)
+
+  // R-Type
+  CONV(r_opcode, 6);
+  CONV(r_rs, 5);
+  CONV(r_rt, 5);
+  CONV(r_rd, 5);
+  CONV(r_shamt, 5);
+  CONV(r_func, 6);
+
+  // I-Type
+  CONV(i_opcode, 6);
+  CONV(i_rs, 5);
+  CONV(i_rt, 5);
+  CONV(i_imm, 16);
+
+  // J-Type
+  CONV(j_opcode, 6);
+  CONV(j_target, 26);
+
+#undef CONV
+}
+
+
+static void ui_field(mu_Context *ctx, const char *label, char *buf, int buf_size, int mode, int bits) {
+  int col_widths[2];
+  col_widths[0] = 60;
+  col_widths[1] = -1;
+  mu_layout_row(ctx, 2, col_widths, 24);
+
+  mu_label(ctx, label);
+
+  char old_buf[64];
+  strncpy(old_buf, buf, 64);
+  old_buf[63] = '\0';
+
+  if (mu_textbox_ex(ctx, buf, buf_size, 0) & MU_RES_CHANGE) {
+      if (strlen(buf) == 0) return;
+
+      char *end;
+      unsigned int val = str_to_val(buf, mode, &end);
+
+      unsigned int max_val = (bits >= 32) ? 0xFFFFFFFF : (1U << bits) - 1;
+
+      // Валидация: если есть мусор (*end != 0) или число слишком большое -> откат
+      if (*end != '\0' || val > max_val) {
+          strcpy(buf, old_buf);
+        }
+    }
+}
 
 static void
 render_char (SDL_Renderer *r, int x, int y, unsigned char ch, SDL_Color color)
@@ -390,7 +523,6 @@ window_write_interface (mu_Context *ctx, MIPS32_t *cpu, ui_state_t *ui)
       mu_label (ctx, "Write Type:");
 
       int write_type_widths[2];
-      mu_layout_row (ctx, 2, write_type_widths, 28);
       write_type_widths[0] = mu_get_current_container (ctx)->body.w / 2 - 4;
       write_type_widths[1] = mu_get_current_container (ctx)->body.w / 2 - 4;
       mu_layout_row (ctx, 2, write_type_widths, 28);
@@ -419,7 +551,6 @@ window_write_interface (mu_Context *ctx, MIPS32_t *cpu, ui_state_t *ui)
                          MU_OPT_ALIGNCENTER);
 
           int btn_widths[2];
-          mu_layout_row (ctx, 2, btn_widths, 28);
           btn_widths[0] = mu_get_current_container (ctx)->body.w / 2 - 4;
           btn_widths[1] = mu_get_current_container (ctx)->body.w / 2 - 4;
           mu_layout_row (ctx, 2, btn_widths, 28);
@@ -434,7 +565,7 @@ window_write_interface (mu_Context *ctx, MIPS32_t *cpu, ui_state_t *ui)
 
                   if (addr + 4 <= 1024)
                     {
-                      *(u32 *)(cpu->memory + addr) = value;
+                      write_u32_be(cpu->memory, addr, value);
                       snprintf (ui->last_status, sizeof (ui->last_status),
                                 "Wrote 0x%08X to 0x%X", value, addr);
                       ui->value_input[0] = '\0';
@@ -459,112 +590,61 @@ window_write_interface (mu_Context *ctx, MIPS32_t *cpu, ui_state_t *ui)
               memset (ui->last_status, 0, sizeof (ui->last_status));
             }
         }
-      else
+      else // WRITE_TYPE_INSTRUCTION
         {
           mu_layout_row (ctx, 1, (int[]){ -1 }, 20);
-          mu_label (ctx, "Instruction Type:");
+          mu_label (ctx, "Input Format:");
+          int mode_widths[4];
+          int w_total = mu_get_current_container (ctx)->body.w;
+          for(int i=0;i<4;i++) mode_widths[i] = w_total / 4 - 4;
+          mu_layout_row (ctx, 4, mode_widths, 24);
+          int old_mode = ui->input_mode;
+          if (mu_button(ctx, ui->input_mode == INPUT_MODE_HEX ? "[HEX]" : "HEX")) ui->input_mode = INPUT_MODE_HEX;
+          if (mu_button(ctx, ui->input_mode == INPUT_MODE_BIN ? "[BIN]" : "BIN")) ui->input_mode = INPUT_MODE_BIN;
+          if (mu_button(ctx, ui->input_mode == INPUT_MODE_DEC ? "[DEC]" : "DEC")) ui->input_mode = INPUT_MODE_DEC;
+          if (mu_button(ctx, ui->input_mode == INPUT_MODE_OCT ? "[OCT]" : "OCT")) ui->input_mode = INPUT_MODE_OCT;
+          if (old_mode != ui->input_mode) convert_fields(ui, old_mode, ui->input_mode);
 
+          mu_layout_row (ctx, 1, (int[]){ -1 }, 20);
+          mu_label (ctx, "Instruction Type:");
           int instr_widths[3];
-          mu_layout_row (ctx, 3, instr_widths, 28);
           instr_widths[0] = mu_get_current_container (ctx)->body.w / 3 - 3;
           instr_widths[1] = mu_get_current_container (ctx)->body.w / 3 - 3;
           instr_widths[2] = mu_get_current_container (ctx)->body.w / 3 - 3;
           mu_layout_row (ctx, 3, instr_widths, 28);
-
-          if (mu_button (ctx,
-                         ui->instr_type == INSTR_TYPE_R ? "[*] R" : "[ ] R"))
-            {
-              ui->instr_type = INSTR_TYPE_R;
-            }
-          if (mu_button (ctx,
-                         ui->instr_type == INSTR_TYPE_I ? "[*] I" : "[ ] I"))
-            {
-              ui->instr_type = INSTR_TYPE_I;
-            }
-          if (mu_button (ctx,
-                         ui->instr_type == INSTR_TYPE_J ? "[*] J" : "[ ] J"))
-            {
-              ui->instr_type = INSTR_TYPE_J;
-            }
+          if (mu_button (ctx, ui->instr_type == INSTR_TYPE_R ? "[*] R" : "[ ] R")) ui->instr_type = INSTR_TYPE_R;
+          if (mu_button (ctx, ui->instr_type == INSTR_TYPE_I ? "[*] I" : "[ ] I")) ui->instr_type = INSTR_TYPE_I;
+          if (mu_button (ctx, ui->instr_type == INSTR_TYPE_J ? "[*] J" : "[ ] J")) ui->instr_type = INSTR_TYPE_J;
 
           mu_layout_row (ctx, 1, (int[]){ -1 }, 8);
           mu_label (ctx, "");
 
           if (ui->instr_type == INSTR_TYPE_R)
             {
-              int col_widths[2];
-              mu_layout_row (ctx, 2, col_widths, 20);
-              col_widths[0] = 200;
-              col_widths[1] = -1;
-
-              mu_layout_row (ctx, 2, col_widths, 20);
-              mu_label (ctx, "Opcode:");
-              mu_textbox_ex (ctx, ui->r_opcode, sizeof (ui->r_opcode), 0);
-
-              mu_layout_row (ctx, 2, col_widths, 20);
-              mu_label (ctx, "RS:");
-              mu_textbox_ex (ctx, ui->r_rs, sizeof (ui->r_rs), 0);
-
-              mu_layout_row (ctx, 2, col_widths, 20);
-              mu_label (ctx, "RT:");
-              mu_textbox_ex (ctx, ui->r_rt, sizeof (ui->r_rt), 0);
-
-              mu_layout_row (ctx, 2, col_widths, 20);
-              mu_label (ctx, "RD:");
-              mu_textbox_ex (ctx, ui->r_rd, sizeof (ui->r_rd), 0);
-
-              mu_layout_row (ctx, 2, col_widths, 20);
-              mu_label (ctx, "SHAMT:");
-              mu_textbox_ex (ctx, ui->r_shamt, sizeof (ui->r_shamt), 0);
-
-              mu_layout_row (ctx, 2, col_widths, 20);
-              mu_label (ctx, "FUNC:");
-              mu_textbox_ex (ctx, ui->r_func, sizeof (ui->r_func), 0);
+              ui_field(ctx, "Opcode:", ui->r_opcode, sizeof(ui->r_opcode), ui->input_mode, 6);
+              ui_field(ctx, "RS:", ui->r_rs, sizeof(ui->r_rs), ui->input_mode, 5);
+              ui_field(ctx, "RT:", ui->r_rt, sizeof(ui->r_rt), ui->input_mode, 5);
+              ui_field(ctx, "RD:", ui->r_rd, sizeof(ui->r_rd), ui->input_mode, 5);
+              ui_field(ctx, "SHAMT:", ui->r_shamt, sizeof(ui->r_shamt), ui->input_mode, 5);
+              ui_field(ctx, "FUNC:", ui->r_func, sizeof(ui->r_func), ui->input_mode, 6);
             }
           else if (ui->instr_type == INSTR_TYPE_I)
             {
-              int col_widths[2];
-              mu_layout_row (ctx, 2, col_widths, 20);
-              col_widths[0] = 200;
-              col_widths[1] = -1;
-
-              mu_layout_row (ctx, 2, col_widths, 20);
-              mu_label (ctx, "Opcode:");
-              mu_textbox_ex (ctx, ui->i_opcode, sizeof (ui->i_opcode), 0);
-
-              mu_layout_row (ctx, 2, col_widths, 20);
-              mu_label (ctx, "RS:");
-              mu_textbox_ex (ctx, ui->i_rs, sizeof (ui->i_rs), 0);
-
-              mu_layout_row (ctx, 2, col_widths, 20);
-              mu_label (ctx, "RT:");
-              mu_textbox_ex (ctx, ui->i_rt, sizeof (ui->i_rt), 0);
-
-              mu_layout_row (ctx, 2, col_widths, 20);
-              mu_label (ctx, "IMM:");
-              mu_textbox_ex (ctx, ui->i_imm, sizeof (ui->i_imm), 0);
+              ui_field(ctx, "Opcode:", ui->i_opcode, sizeof(ui->i_opcode), ui->input_mode, 6);
+              ui_field(ctx, "RS:", ui->i_rs, sizeof(ui->i_rs), ui->input_mode, 5);
+              ui_field(ctx, "RT:", ui->i_rt, sizeof(ui->i_rt), ui->input_mode, 5);
+              ui_field(ctx, "IMM:", ui->i_imm, sizeof(ui->i_imm), ui->input_mode, 16);
             }
           else
             {
-              int col_widths[2];
-              mu_layout_row (ctx, 2, col_widths, 20);
-              col_widths[0] = 200;
-              col_widths[1] = -1;
-
-              mu_layout_row (ctx, 2, col_widths, 20);
-              mu_label (ctx, "Opcode:");
-              mu_textbox_ex (ctx, ui->j_opcode, sizeof (ui->j_opcode), 0);
-
-              mu_layout_row (ctx, 2, col_widths, 20);
-              mu_label (ctx, "Target:");
-              mu_textbox_ex (ctx, ui->j_target, sizeof (ui->j_target), 0);
+              ui_field(ctx, "Opcode:", ui->j_opcode, sizeof(ui->j_opcode), ui->input_mode, 6);
+              ui_field(ctx, "Target:", ui->j_target, sizeof(ui->j_target), ui->input_mode, 26);
             }
 
           mu_layout_row (ctx, 1, (int[]){ -1 }, 8);
           mu_label (ctx, "");
 
           int btn_widths[2];
-          mu_layout_row (ctx, 2, btn_widths, 28);
           btn_widths[0] = mu_get_current_container (ctx)->body.w / 2 - 4;
           btn_widths[1] = mu_get_current_container (ctx)->body.w / 2 - 4;
           mu_layout_row (ctx, 2, btn_widths, 28);
@@ -578,38 +658,34 @@ window_write_interface (mu_Context *ctx, MIPS32_t *cpu, ui_state_t *ui)
 
                   if (addr + 4 <= 1024)
                     {
-                      u32 instr = 0;
+                      MIPS32_instruction_t instr_union;
+                      instr_union.raw = 0; // Очищаем мусор
 
                       if (ui->instr_type == INSTR_TYPE_R)
                         {
-                          u32 op = strtoul (ui->r_opcode, NULL, 10) & 0x3F;
-                          u32 rs = strtoul (ui->r_rs, NULL, 10) & 0x1F;
-                          u32 rt = strtoul (ui->r_rt, NULL, 10) & 0x1F;
-                          u32 rd = strtoul (ui->r_rd, NULL, 10) & 0x1F;
-                          u32 shamt = strtoul (ui->r_shamt, NULL, 10) & 0x1F;
-                          u32 func = strtoul (ui->r_func, NULL, 10) & 0x3F;
-                          instr = (op << 26) | (rs << 21) | (rt << 16)
-                                  | (rd << 11) | (shamt << 6) | func;
+                          instr_union.r.opcode = str_to_val (ui->r_opcode, ui->input_mode, NULL);
+                          instr_union.r.rs     = str_to_val (ui->r_rs, ui->input_mode, NULL);
+                          instr_union.r.rt     = str_to_val (ui->r_rt, ui->input_mode, NULL);
+                          instr_union.r.rd     = str_to_val (ui->r_rd, ui->input_mode, NULL);
+                          instr_union.r.shamt  = str_to_val (ui->r_shamt, ui->input_mode, NULL);
+                          instr_union.r.funct  = str_to_val (ui->r_func, ui->input_mode, NULL);
                         }
                       else if (ui->instr_type == INSTR_TYPE_I)
                         {
-                          u32 op = strtoul (ui->i_opcode, NULL, 10) & 0x3F;
-                          u32 rs = strtoul (ui->i_rs, NULL, 10) & 0x1F;
-                          u32 rt = strtoul (ui->i_rt, NULL, 10) & 0x1F;
-                          u32 imm = strtoul (ui->i_imm, NULL, 16) & 0xFFFF;
-                          instr = (op << 26) | (rs << 21) | (rt << 16) | imm;
+                          instr_union.i.opcode = str_to_val (ui->i_opcode, ui->input_mode, NULL);
+                          instr_union.i.rs     = str_to_val (ui->i_rs, ui->input_mode, NULL);
+                          instr_union.i.rt     = str_to_val (ui->i_rt, ui->input_mode, NULL);
+                          instr_union.i.imm    = str_to_val (ui->i_imm, ui->input_mode, NULL);
                         }
                       else
                         {
-                          u32 op = strtoul (ui->j_opcode, NULL, 10) & 0x3F;
-                          u32 target
-                              = strtoul (ui->j_target, NULL, 10) & 0x3FFFFFF;
-                          instr = (op << 26) | target;
+                          instr_union.j.opcode  = str_to_val (ui->j_opcode, ui->input_mode, NULL);
+                          instr_union.j.address = str_to_val (ui->j_target, ui->input_mode, NULL);
                         }
+                      write_u32_be(cpu->memory, addr, instr_union.raw);
 
-                      *(u32 *)(cpu->memory + addr) = instr;
                       snprintf (ui->last_status, sizeof (ui->last_status),
-                                "Wrote 0x%08X to 0x%X", instr, addr);
+                                "Wrote Instr 0x%08X", instr_union.raw);
                     }
                   else
                     {
@@ -640,6 +716,7 @@ window_write_interface (mu_Context *ctx, MIPS32_t *cpu, ui_state_t *ui)
       mu_end_window (ctx);
     }
 }
+
 
 static void
 window_memory_dump (mu_Context *ctx, MIPS32_t *cpu, ui_state_t *ui)
@@ -690,19 +767,6 @@ window_memory_dump (mu_Context *ctx, MIPS32_t *cpu, ui_state_t *ui)
         }
 
       mu_end_panel (ctx);
-
-      if (mu_button (ctx, "Set"))
-        {
-          if (ui->edit_addr < 1024 && strlen (ui->edit_byte) > 0)
-            {
-              u8 val = (u8)strtoul (ui->edit_byte, NULL, 16);
-              cpu->memory[ui->edit_addr] = val;
-              snprintf (ui->last_status, sizeof (ui->last_status),
-                        "Wrote 0x%02X to 0x%04X", val, ui->edit_addr);
-              ui->edit_addr++;
-              ui->edit_byte[0] = '\0';
-            }
-        }
 
       mu_end_window (ctx);
     }
