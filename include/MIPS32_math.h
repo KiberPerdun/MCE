@@ -7,6 +7,7 @@
 
 #include "MIPS32.h"
 
+exception MIPS32_add (MIPS32_t *cpu);
 exception MIPS32_addi (MIPS32_t *cpu);
 
 #endif // MCE_MIPS32_MATH_H
