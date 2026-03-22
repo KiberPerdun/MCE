@@ -451,7 +451,7 @@ handle_keyboard_input (mu_Context *ctx, SDL_Event *e)
 static void
 window_registers (mu_Context *ctx, MIPS32_t *cpu, ui_state_t *ui)
 {
-  if (mu_begin_window_ex (ctx, "Registers", mu_rect (10, 10, 500, 400),
+  if (mu_begin_window_ex (ctx, "Registers", mu_rect (10, 10, 500, 680),
                           MU_OPT_NORESIZE))
     {
       char buf[64];
